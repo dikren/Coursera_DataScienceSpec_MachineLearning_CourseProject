@@ -1,0 +1,135 @@
+
+# Prediction of quality of physical exercise performance.
+## Executive summary.
+The aim of this analysis is to train a machine learning model to determine if a person doing exercise in a wrong way.  
+During the work an exploratory data analysis were performed for reducing the number of variables; 
+the random forest model were trained and the estimation of the out of sample error were calculated. 
+Also, the prediction for the test data were performed.
+
+## Exploratory analysis and data cleaning.
+
+First of all I need to load the data from the working directory.
+```{r loading data, cache = TRUE}
+originalTrainData = read.csv("data/pml-training.csv", header = TRUE)
+originalTestData = read.csv("data/pml-testing.csv", header = TRUE)
+```
+
+Apparently, there are very much columns with almost only empty or NA values:
+```{r showing subset of empty columns}
+options(width = 100L)
+originalTrainData[1:6, 10:25]
+```
+
+All those columns have some summary data for the time window of one exercise performed by a person in observation.
+I am going to try to make a prediction model basing on the raw data coming from the devices without any statistics 
+which can be calculated only after a while since the exercise was started.  
+So, I will drop these columns. 
+
+```{r removing almost empty columns}
+columnsOfInterest = setdiff(names(originalTrainData), 
+    grep("^var_|^stddev_|^min_|^max_|^skewness_|^avg_|^kurtosis_|^amplitude_|^var_", 
+    names(originalTrainData), value = T))
+```
+
+Also there are indexing columns and columns with time and marker columns, 
+which allowes to determine the number of time window and if current row is the end of the window 
+and so the statistics summary can be calculated. All these columns are also redundant.  
+
+I am interested only in:  
+- the name of a person, since different persons may perform same task in different ways  
+- the raw data coming from devices  
+- classe column, since it is the output
+- problem_id - it is the number of test task from the submission assignment in the test dataset.
+
+So I am going to drop all other columns
+```{r drop redundant columns}
+columnsOfInterest = setdiff(columnsOfInterest, 
+    grep("^X$|raw_timestamp_part_1|raw_timestamp_part_2|cvtd_timestamp|new_window|num_window", 
+    columnsOfInterest, value = T))
+
+# I also remove "classe" column to get vector of columns common for the training and testing datasets.
+# I will add classe and problem_id columns to each of them when it will be needed
+columnsOfInterest = setdiff(columnsOfInterest, "classe")
+```
+Here are the columns I will use:
+```{r using columns printing}
+columnsOfInterest
+```
+
+Now I will make one dataset which I will use to train model and to estimate out of sample error, 
+and another which I will need to perform assignment submission.
+```{r creating datasets for training and the submission 20 tests}
+sampleData = subset(originalTrainData, select = c(columnsOfInterest, "classe"))
+submissionTestData = subset(originalTestData, select = c(columnsOfInterest, "problem_id"))
+```
+
+## Training of statistical model and estimation of out of sample error. 
+
+I decided to use random forest algorithm for this analysis because of its good performance in classification tasks.
+For the purpose of out of sample error estimation I used cross validation by specifying parameters for the train 
+function, namely, I called trainControl function with method "cv" which stands for cross validation and with
+default number of folds (= 10).  
+So the random forest algorithm will be applied 10 times each time to only 9 of 10 folds (parts) of training dataset. 
+Then the error on the left part will be calculated (for each of 10 left parts). 
+The resulted out of sample error estimation is the average of these errors on all left parts.
+
+
+```{r training random forest, cache = TRUE}
+# loading caret package
+suppressMessages(library(caret))
+# making trainControl object with cv parameter specified (stands for cross validation). 
+# The default k = 10 folds is used.
+trainCtrl = trainControl(method = "cv")
+# training random forest with cross validation for the purpose of estimation of out of sample error value
+modelRF = train(classe ~ ., sampleData, model = "rf", trControl = trainCtrl)
+```
+
+Here is the results
+```{r random forest results}
+modelRF
+```
+So the estimation of out of sample error is 1 - Accuracy = 1 - 
+`r modelRF$results[modelRF$results$mtry == modelRF$bestTune$mtry[1], 'Accuracy']` = 
+`r 1 - modelRF$results[modelRF$results$mtry == modelRF$bestTune$mtry[1], 'Accuracy']`.  
+And this is very good results I suppose.  
+The per class correctness level can be seen below:
+```{r random forest final model results}
+modelRF$finalModel
+```
+
+
+## Predicting outcome for submission testing dataset. 
+
+The testing data set must be exposed to the same data transformations as the training one. The only difference is
+if I had been used some statistics of the training sample (function of the training data points) then for a test sample
+I should to use the same value of statistics I have got on the training data.  
+But in the current case I didn't use any statistic of the training data. I just decreased number of columns.  
+So, below is the prediction of classe variable which was made by my trained model of random forest.
+```{r predicting of 20 test data}
+# prediction of classe for the 20 size test data.
+classe = predict(modelRF, newdata = subset(submissionTestData, select = -problem_id))
+answers = cbind(submissionTestData, classe)
+```
+
+And here is the code for saving results into files.
+```{r saving results of test data into files}
+pml_write_files = function(dataFrame){
+    n = dim(dataFrame)[1]
+    res = character()
+    for(i in 1:n){
+        filename = paste0("testPredictions/problem_id_",i,".txt")
+        classe = subset(dataFrame, subset = problem_id == i, select = classe)
+        res = levels(classe[,1])[classe[1,1]]
+        write.table(as.character(res),file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        
+    }
+}
+pml_write_files(answers)
+```
+
+And the results are:
+```{r predicted test values}
+res = answers$classe
+names(res) = answers$problem_id
+res
+```
